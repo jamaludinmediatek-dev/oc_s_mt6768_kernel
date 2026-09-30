@@ -64,7 +64,9 @@ jobs:
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
           rm -rf AK3/.git
           cp out/arch/arm64/boot/Image.gz-dtb AK3/
-          sed -i 's|^block=.*|block=/dev/block/by-name/boot;|I; s|^do.devicecheck=.*|do.devicecheck=0|I; s|^is_slot_device=.*|is_slot_device=0;|I' AK3/anykernel.sh
+          sed -i 's|^block=.*|block=/dev/block/platform/bootdevice/by-name/boot;|I; s|^do.devicecheck=.*|do.devicecheck=0|I; s|^is_slot_device=.*|is_slot_device=0;|I' AK3/anykernel.sh
+          echo "=== CEK ANYKERNEL ==="
+          grep -n -i -E "^block=|^is_slot_device|^do.devicecheck" AK3/anykernel.sh
           cd AK3 && zip -r9 ../kernel-merlin-ksunext.zip .
 
       - uses: actions/upload-artifact@v4
