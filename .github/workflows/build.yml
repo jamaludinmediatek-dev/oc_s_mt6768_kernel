@@ -1,6 +1,10 @@
-name: Build Kernel Original A13
+name: Build Kernel KSU Next Versi Pilihan
 on:
   workflow_dispatch:
+    inputs:
+      ksu_ref:
+        description: "Versi/branch KernelSU Next (contoh: v3.2.0-legacy)"
+        default: "v3.2.0-legacy"
 
 jobs:
   build:
@@ -15,16 +19,38 @@ jobs:
           sudo apt-get install -y libtinfo5 || true
           sudo ln -sf /usr/bin/python2 /usr/bin/python
 
-      - name: Cari defconfig dan matikan KSU
+      - name: Daftar tag KernelSU Next
+        run: |
+          echo "=== TAG YANG TERSEDIA ==="
+          git ls-remote --tags https://github.com/KernelSU-Next/KernelSU-Next | grep -i legacy | sed 's|.*refs/tags/||' | head -30 || true
+
+      - name: Pasang KernelSU Next
+        run: curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s ${{ inputs.ksu_ref }}
+
+      - name: Tambal bug ksu_init_rc_hook kalau ada
+        run: |
+          F=drivers/kernelsu/runtime/ksud_integration.c
+          if [ -f "$F" ]; then
+          python3 - <<'EOF'
+          p = "drivers/kernelsu/runtime/ksud_integration.c"
+          s = open(p).read()
+          key = "void stop_init_rc_hook();"
+          if "static bool ksu_init_rc_hook" not in s and key in s:
+              s = s.replace(key, key + "\nstatic bool ksu_init_rc_hook = true;", 1)
+          open(p, "w").write(s)
+          EOF
+          fi
+          echo "=== OPSI KSU ==="
+          grep -n "config KSU" drivers/kernelsu/Kconfig | head -20 || true
+
+      - name: Cari defconfig dan aktifkan KSU
         run: |
           DEF=$(ls arch/arm64/configs | grep -i merlin | head -1)
           [ -z "$DEF" ] && DEF=$(ls arch/arm64/configs | grep -i mt6768 | head -1)
           echo "Pakai defconfig: $DEF"
           test -n "$DEF"
           echo "DEF=$DEF" >> $GITHUB_ENV
-          echo "=== STATUS KSU DI DEFCONFIG ==="
-          grep -n "CONFIG_KSU" arch/arm64/configs/$DEF || echo "tidak ada CONFIG_KSU"
-          echo "# CONFIG_KSU is not set" >> arch/arm64/configs/$DEF
+          printf 'CONFIG_KSU=y\nCONFIG_KPROBES=y\nCONFIG_HAVE_KPROBES=y\nCONFIG_KPROBE_EVENTS=y\n' >> arch/arm64/configs/$DEF
 
       - name: Download Proton Clang
         run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang-13/aaa
@@ -36,10 +62,12 @@ jobs:
           $MK $DEF > build.log 2>&1 || true
           $MK >> build.log 2>&1 || true
           [ -f out/arch/arm64/boot/Image.gz-dtb ] || $MK Image.gz-dtb >> build.log 2>&1 || true
+          echo "=== MODE HOOK ==="
+          grep -n "Hook mode" build.log | head -3 || true
           echo "=== RINGKASAN ERROR ==="
           grep -n -E "error:|\*\*\* \[|undefined reference" build.log | head -40 || true
-          echo "=== CEK KSU DI HASIL ==="
-          grep -n "CONFIG_KSU" out/.config || echo "KSU tidak aktif"
+          echo "=== 40 BARIS TERAKHIR ==="
+          tail -40 build.log
 
       - name: Cek hasil build
         run: test -f out/arch/arm64/boot/Image.gz-dtb
@@ -52,11 +80,11 @@ jobs:
           rm -f AK3/*.zip AK3/*-dtb AK3/Image*
           rm -rf AK3/ramdisk/overlay.d
           cp out/arch/arm64/boot/Image.gz-dtb AK3/
-          cd AK3 && zip -r9 ../kernel-merlin-original.zip . -x ".git*"
+          cd AK3 && zip -r9 ../kernel-merlin-ksunext.zip . -x ".git*"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kernel-merlin-original
+          name: kernel-merlin-ksunext
           path: |
-            kernel-merlin-original.zip
+            kernel-merlin-ksunext.zip
             out/arch/arm64/boot/Image.gz-dtb
