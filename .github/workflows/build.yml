@@ -1,4 +1,4 @@
-name: Build Kernel KSU Next SyscallTable
+name: Build Kernel KSU Next ManualHook
 on:
   workflow_dispatch:
 
@@ -18,14 +18,103 @@ jobs:
       - name: Pasang KernelSU Next legacy
         run: curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
 
-      - name: Cari defconfig dan aktifkan mode syscall table
+      - name: Pasang hook manual di kernel
+        run: |
+          cat > patch_ksu.py <<'EOF'
+          import sys
+
+          def fail(m):
+              print("GAGAL:", m)
+              sys.exit(1)
+
+          def rd(p):
+              return open(p).read()
+
+          def wr(p, s):
+              open(p, "w").write(s)
+
+          def before(s, anchor, text, start=0):
+              i = s.find(anchor, start)
+              if i < 0:
+                  fail("titik tidak ditemukan: " + anchor)
+              return s[:i] + text + s[i:]
+
+          # ---- fs/exec.c ----
+          p = "fs/exec.c"
+          s = rd(p)
+          if "ksu_handle_execveat" not in s:
+              decl = "#ifdef CONFIG_KSU\nextern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n#endif\n\n"
+              s = before(s, "int do_execve(struct filename *filename,", decl)
+              old = "\treturn do_execveat_common(AT_FDCWD, filename, argv, envp, 0);"
+              if old not in s:
+                  fail("do_execve tidak ditemukan")
+              s = s.replace(old, "#ifdef CONFIG_KSU\n\tksu_handle_execveat((int *)AT_FDCWD, &filename, &argv, &envp, 0);\n#endif\n" + old)
+              old2 = "\treturn do_execveat_common(fd, filename, argv, envp, flags);"
+              if old2 in s:
+                  s = s.replace(old2, "#ifdef CONFIG_KSU\n\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n#endif\n" + old2)
+              wr(p, s)
+              print("OK", p)
+
+          # ---- fs/open.c ----
+          p = "fs/open.c"
+          s = rd(p)
+          if "ksu_handle_faccessat" not in s:
+              a = "SYSCALL_DEFINE3(faccessat"
+              decl = "#ifdef CONFIG_KSU\nextern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n#endif\n\n"
+              s = before(s, a, decl)
+              f = s.find(a)
+              s = before(s, "\tif (mode & ~S_IRWXO)", "#ifdef CONFIG_KSU\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n#endif\n\n", f)
+              wr(p, s)
+              print("OK", p)
+
+          # ---- fs/read_write.c ----
+          p = "fs/read_write.c"
+          s = rd(p)
+          if "ksu_handle_sys_read" not in s:
+              a = "SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)"
+              decl = "#ifdef CONFIG_KSU\nextern bool ksu_vfs_read_hook __read_mostly;\nextern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr);\n#endif\n\n"
+              s = before(s, a, decl)
+              f = s.find(a)
+              s = before(s, "\tif (f.file) {", "#ifdef CONFIG_KSU\n\tif (unlikely(ksu_vfs_read_hook))\n\t\tksu_handle_sys_read(fd, &buf, &count);\n#endif\n", f)
+              wr(p, s)
+              print("OK", p)
+
+          # ---- fs/stat.c ----
+          p = "fs/stat.c"
+          s = rd(p)
+          if "ksu_handle_stat" not in s:
+              a = "SYSCALL_DEFINE4(newfstatat"
+              decl = "#ifdef CONFIG_KSU\nextern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);\n#endif\n\n"
+              s = before(s, a, decl)
+              f = s.find(a)
+              s = before(s, "\terror = vfs_fstatat(dfd, filename, &stat, flag);", "#ifdef CONFIG_KSU\n\tksu_handle_stat(&dfd, &filename, &flag);\n#endif\n", f)
+              wr(p, s)
+              print("OK", p)
+
+          # ---- kernel/reboot.c ----
+          p = "kernel/reboot.c"
+          s = rd(p)
+          if "ksu_handle_sys_reboot" not in s:
+              a = "SYSCALL_DEFINE4(reboot"
+              decl = "#ifdef CONFIG_KSU\nextern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n#endif\n\n"
+              s = before(s, a, decl)
+              f = s.find(a)
+              s = before(s, "\t/* We only trust the superuser with rebooting the system. */", "#ifdef CONFIG_KSU\n\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n#endif\n\n", f)
+              wr(p, s)
+              print("OK", p)
+          EOF
+          python3 patch_ksu.py
+          echo "=== HOOK TERPASANG ==="
+          grep -rn "ksu_handle" fs kernel --include=*.c | grep -v "drivers/kernelsu" | head -20
+
+      - name: Cari defconfig dan aktifkan manual hook
         run: |
           DEF=$(ls arch/arm64/configs | grep -i merlin | head -1)
           [ -z "$DEF" ] && DEF=$(ls arch/arm64/configs | grep -i mt6768 | head -1)
           echo "Pakai defconfig: $DEF"
           test -n "$DEF"
           echo "DEF=$DEF" >> $GITHUB_ENV
-          printf 'CONFIG_KSU=y\nCONFIG_KSU_SYSCALL_TABLE_HOOK=y\n# CONFIG_KSU_MANUAL_HOOK is not set\n# CONFIG_KSU_KPROBES_HOOK is not set\n' >> arch/arm64/configs/$DEF
+          printf 'CONFIG_KSU=y\nCONFIG_KSU_MANUAL_HOOK=y\n# CONFIG_KSU_SYSCALL_TABLE_HOOK is not set\n# CONFIG_KSU_KPROBES_HOOK is not set\n' >> arch/arm64/configs/$DEF
 
       - name: Download Proton Clang
         run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang-13/aaa
@@ -40,7 +129,7 @@ jobs:
           echo "=== MODE HOOK ==="
           grep -n "Hook mode" build.log | head -3 || true
           echo "=== CONFIG HASIL ==="
-          grep -n -E "CONFIG_KSU|CONFIG_KPROBES|CONFIG_KALLSYMS" out/.config || true
+          grep -n -E "CONFIG_KSU|CONFIG_KPROBES" out/.config || true
           echo "=== PESAN ERROR ==="
           grep -n -E "error:|\*\*\*|Stop\." build.log | grep -v -E "ERR_get_error|extract-cert" | head -40 || true
           echo "=== 40 BARIS TERAKHIR ==="
@@ -57,11 +146,11 @@ jobs:
           rm -f AK3/*.zip AK3/*-dtb AK3/Image*
           rm -rf AK3/ramdisk/overlay.d
           cp out/arch/arm64/boot/Image.gz-dtb AK3/
-          cd AK3 && zip -r9 ../kernel-merlin-ksunext-syscalltable.zip . -x ".git*"
+          cd AK3 && zip -r9 ../kernel-merlin-ksunext-manual.zip . -x ".git*"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kernel-merlin-ksunext-syscalltable
+          name: kernel-merlin-ksunext-manual
           path: |
-            kernel-merlin-ksunext-syscalltable.zip
+            kernel-merlin-ksunext-manual.zip
             out/arch/arm64/boot/Image.gz-dtb
