@@ -32,8 +32,6 @@ jobs:
 
       - name: Cari defconfig dan aktifkan KSU
         run: |
-          echo "=== DAFTAR DEFCONFIG ==="
-          ls arch/arm64/configs | grep -i -E "merlin|mt6768|lancelot" || true
           DEF=$(ls arch/arm64/configs | grep -i merlin | head -1)
           [ -z "$DEF" ] && DEF=$(ls arch/arm64/configs | grep -i mt6768 | head -1)
           echo "Pakai defconfig: $DEF"
@@ -53,19 +51,21 @@ jobs:
           [ -f out/arch/arm64/boot/Image.gz-dtb ] || $MK Image.gz-dtb >> build.log 2>&1 || true
           echo "=== RINGKASAN ERROR ==="
           grep -n -E "error:|\*\*\* \[|undefined reference" build.log | head -40 || true
-          echo "=== ISI BOOT ==="
-          ls -la out/arch/arm64/boot || true
 
       - name: Cek hasil build
         run: test -f out/arch/arm64/boot/Image.gz-dtb
 
-      - name: Buat zip AnyKernel3
+      - name: Buat zip dengan template Shas
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
-          rm -rf AK3/.git
+          git clone --depth=1 --filter=blob:none --sparse -b shas-noc https://github.com/Shas45558/shas-dream-oc-mt6768-a11 tpl
+          cd tpl && git sparse-checkout set AnyKernel3-master && cd ..
+          cp -r tpl/AnyKernel3-master AK3
+          rm -f AK3/*.zip AK3/*-dtb AK3/Image*
+          rm -rf AK3/ramdisk/overlay.d
           cp out/arch/arm64/boot/Image.gz-dtb AK3/
-          sed -i 's|^block=.*|block=/dev/block/by-name/boot;|I; s|^do.devicecheck=.*|do.devicecheck=0|I; s|^is_slot_device=.*|is_slot_device=0;|I' AK3/anykernel.sh
-          cd AK3 && zip -r9 ../kernel-merlin-ksunext.zip .
+          echo "=== ISI ANYKERNEL ==="
+          grep -n -i -E "^block=|is_slot_device|do.devicecheck|device.name" AK3/anykernel.sh || true
+          cd AK3 && zip -r9 ../kernel-merlin-ksunext.zip . -x ".git*"
 
       - uses: actions/upload-artifact@v4
         with:
