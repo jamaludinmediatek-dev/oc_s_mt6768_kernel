@@ -1,0 +1,37 @@
+name: Diagnosa KSU
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pasang KernelSU Next legacy
+        run: curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
+
+      - name: Opsi KSU
+        run: |
+          echo "=== OPSI KSU ==="
+          grep -n -E "^config|^menuconfig|depends on|default " drivers/kernelsu/Kconfig | head -60 || true
+
+      - name: Hook yang sudah ada di kernel
+        run: |
+          echo "=== HOOK KSU/SUSFS DI KERNEL ==="
+          grep -rn -E "ksu_handle|susfs_" fs kernel drivers/input security include --include=*.c --include=*.h | grep -v "drivers/kernelsu" | head -40 || true
+
+      - name: Lokasi fungsi yang perlu di-hook
+        run: |
+          echo "=== EXEC ==="
+          grep -n -E "do_execveat_common|__do_execve_file" fs/exec.c | head -5 || true
+          echo "=== OPEN ==="
+          grep -n "faccessat" fs/open.c | head -5 || true
+          echo "=== READ ==="
+          grep -n -E "^ssize_t vfs_read|^ssize_t kernel_read" fs/read_write.c | head -5 || true
+          echo "=== STAT ==="
+          grep -n -E "vfs_statx|vfs_fstatat|newfstatat" fs/stat.c | head -5 || true
+          echo "=== INPUT ==="
+          grep -n "input_handle_event" drivers/input/input.c | head -3 || true
+          echo "=== KPROBES DI DEFCONFIG ==="
+          grep -n -E "KPROBES|KRETPROBES|CONFIG_KSU" arch/arm64/configs/merlin_defconfig || true
