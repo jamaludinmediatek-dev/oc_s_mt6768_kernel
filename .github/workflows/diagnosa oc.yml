@@ -8,22 +8,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cari tabel frekuensi
+      - name: Isi folder cpufreq
         run: |
-          echo "=== FILE YANG MEMUAT 2500000 ==="
-          grep -rlE "2500000|OP\(2500" drivers arch include --include=*.c --include=*.h | head -20 || true
-          echo "=== FILE YANG MEMUAT 2333000 ==="
-          grep -rlE "2333000|OP\(2333" drivers arch include --include=*.c --include=*.h | head -20 || true
-          echo "=== FILE YANG MEMUAT 2300000 ==="
-          grep -rlE "2300000|OP\(2300" drivers arch include --include=*.c --include=*.h | head -20 || true
+          D=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768
+          echo "=== ISI FOLDER ==="
+          ls -la $D
+          echo "=== DEFINISI AWAL TABEL ==="
+          sed -n '1,70p' $D/mtk_cpufreq_opp_table.h
 
-      - name: Isi tabel
+      - name: Baris tabel OPP
         run: |
-          for f in $(grep -rlE "2500000|OP\(2500" drivers --include=*.h --include=*.c | head -3); do
-            echo "=== ISI $f ==="
-            grep -n -B4 -A22 -E "2500000|OP\(2500" $f | head -80
-          done
-          for f in $(grep -rlE "2300000|OP\(2300" drivers --include=*.h --include=*.c | head -3); do
-            echo "=== ISI $f ==="
-            grep -n -B4 -A22 -E "2300000|OP\(2300" $f | head -80
-          done
+          D=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768
+          echo "=== BARIS OP DAN NAMA TABEL ==="
+          grep -n -E "static struct mt_cpu_freq_info|OP\(|FREQ|define" $D/mtk_cpufreq_opp_table.h | head -150
+
+      - name: Batas jumlah OPP dan frekuensi
+        run: |
+          D=drivers/misc/mediatek/base/power/cpufreq_v1/src
+          echo "=== NR_FREQ DAN BATAS ==="
+          grep -rn -E "NR_FREQ|NR_OPP|MAX_FREQ|CPU_DVFS_FREQ0" $D --include=*.h | head -30 || true
+          echo "=== PENANDA OC ==="
+          grep -rn -i -E "overclock|oc_|_oc" $D --include=*.h --include=*.c | head -20 || true
