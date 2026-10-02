@@ -8,24 +8,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Isi folder cpufreq
+      - name: Lokasi angka OC
         run: |
-          D=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768
-          echo "=== ISI FOLDER ==="
-          ls -la $D
-          echo "=== DEFINISI AWAL TABEL ==="
-          sed -n '1,70p' $D/mtk_cpufreq_opp_table.h
+          D=drivers/misc/mediatek/base/power/cpufreq_v1
+          echo "=== BARIS YANG MEMUAT ANGKA OC ==="
+          grep -rn -E "2500000|2333000|2166000|2300000|2133000|2066000" $D --include=*.h --include=*.c | head -60 || true
+          echo "=== DAFTAR ARRAY OPP ==="
+          grep -n -E "static struct mt_cpu_freq_info|opp_tbl" $D/src/mach/mt6768/mtk_cpufreq_opp_table.h | head -60 || true
 
-      - name: Baris tabel OPP
+      - name: Isi blok OC
         run: |
-          D=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768
-          echo "=== BARIS OP DAN NAMA TABEL ==="
-          grep -n -E "static struct mt_cpu_freq_info|OP\(|FREQ|define" $D/mtk_cpufreq_opp_table.h | head -150
+          F=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768/mtk_cpufreq_opp_table.h
+          N=$(grep -n -E "2500000|2333000" $F | head -1 | cut -d: -f1)
+          echo "BARIS PERTAMA: $N"
+          if [ -n "$N" ]; then
+            S=$((N-12))
+            [ $S -lt 1 ] && S=1
+            sed -n "${S},$((N+45))p" $F | cat -n
+          fi
 
-      - name: Batas jumlah OPP dan frekuensi
+      - name: Cara tabel dipilih
         run: |
           D=drivers/misc/mediatek/base/power/cpufreq_v1/src
-          echo "=== NR_FREQ DAN BATAS ==="
-          grep -rn -E "NR_FREQ|NR_OPP|MAX_FREQ|CPU_DVFS_FREQ0" $D --include=*.h | head -30 || true
-          echo "=== PENANDA OC ==="
-          grep -rn -i -E "overclock|oc_|_oc" $D --include=*.h --include=*.c | head -20 || true
+          echo "=== PEMILIHAN TABEL ==="
+          grep -rn -E "opp_tbl|FY_6768Tbl|proTbl|segment|CPU_LEVEL" $D/mach/mt6768/mtk_cpufreq_platform.c | head -40 || true
