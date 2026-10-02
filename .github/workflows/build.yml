@@ -7,10 +7,10 @@ on:
         default: "2600000"
       little_khz:
         description: "Frekuensi cluster kecil (kHz)"
-        default: "2400000"
+        default: "2500000"
       dv:
-        description: "Tambahan tegangan (satuan 10uV, 1250 = 12.5mV)"
-        default: "1250"
+        description: "Tambahan tegangan (satuan 10uV, 2500 = 25mV)"
+        default: "2500"
 
 jobs:
   build:
