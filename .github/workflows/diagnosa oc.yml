@@ -1,0 +1,29 @@
+name: Diagnosa OC
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cari tabel frekuensi
+        run: |
+          echo "=== FILE YANG MEMUAT 2500000 ==="
+          grep -rlE "2500000|OP\(2500" drivers arch include --include=*.c --include=*.h | head -20 || true
+          echo "=== FILE YANG MEMUAT 2333000 ==="
+          grep -rlE "2333000|OP\(2333" drivers arch include --include=*.c --include=*.h | head -20 || true
+          echo "=== FILE YANG MEMUAT 2300000 ==="
+          grep -rlE "2300000|OP\(2300" drivers arch include --include=*.c --include=*.h | head -20 || true
+
+      - name: Isi tabel
+        run: |
+          for f in $(grep -rlE "2500000|OP\(2500" drivers --include=*.h --include=*.c | head -3); do
+            echo "=== ISI $f ==="
+            grep -n -B4 -A22 -E "2500000|OP\(2500" $f | head -80
+          done
+          for f in $(grep -rlE "2300000|OP\(2300" drivers --include=*.h --include=*.c | head -3); do
+            echo "=== ISI $f ==="
+            grep -n -B4 -A22 -E "2300000|OP\(2300" $f | head -80
+          done
