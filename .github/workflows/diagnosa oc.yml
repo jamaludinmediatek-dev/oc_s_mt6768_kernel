@@ -8,27 +8,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lokasi angka OC
-        run: |
-          D=drivers/misc/mediatek/base/power/cpufreq_v1
-          echo "=== BARIS YANG MEMUAT ANGKA OC ==="
-          grep -rn -E "2500000|2333000|2166000|2300000|2133000|2066000" $D --include=*.h --include=*.c | head -60 || true
-          echo "=== DAFTAR ARRAY OPP ==="
-          grep -n -E "static struct mt_cpu_freq_info|opp_tbl" $D/src/mach/mt6768/mtk_cpufreq_opp_table.h | head -60 || true
-
-      - name: Isi blok OC
+      - name: Frekuensi dan tegangan G75
         run: |
           F=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768/mtk_cpufreq_opp_table.h
-          N=$(grep -n -E "2500000|2333000" $F | head -1 | cut -d: -f1)
-          echo "BARIS PERTAMA: $N"
-          if [ -n "$N" ]; then
-            S=$((N-12))
-            [ $S -lt 1 ] && S=1
-            sed -n "${S},$((N+45))p" $F | cat -n
-          fi
+          echo "=== OPP_TABLE 668-780 ==="
+          awk 'NR>=668 && NR<=780 {printf "%d: %s\n", NR, $0}' $F
 
-      - name: Cara tabel dipilih
+      - name: Metode PLL G75
         run: |
-          D=drivers/misc/mediatek/base/power/cpufreq_v1/src
-          echo "=== PEMILIHAN TABEL ==="
-          grep -rn -E "opp_tbl|FY_6768Tbl|proTbl|segment|CPU_LEVEL" $D/mach/mt6768/mtk_cpufreq_platform.c | head -40 || true
+          F=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768/mtk_cpufreq_opp_table.h
+          echo "=== OPP_TABLE 1083-1165 ==="
+          awk 'NR>=1083 && NR<=1165 {printf "%d: %s\n", NR, $0}' $F
+
+      - name: Tabel PV G75
+        run: |
+          F=drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768/mtk_cpufreq_opp_pv_table.h
+          echo "=== PV_TABLE 415-500 ==="
+          awk 'NR>=415 && NR<=500 {printf "%d: %s\n", NR, $0}' $F
