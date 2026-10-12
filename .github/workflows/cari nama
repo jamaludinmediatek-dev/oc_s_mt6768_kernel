@@ -1,4 +1,4 @@
-name: Cari nama 
+name: Cari nama.yml
 on: workflow_dispatch
 jobs:
   cari:
