@@ -1,16 +1,6 @@
-name: Build Kernel KSU Next ManualHook OC
+name: Build Kernel KSU Next ManualHook
 on:
   workflow_dispatch:
-    inputs:
-      big_khz:
-        description: "Frekuensi cluster besar (kHz)"
-        default: "2600000"
-      little_khz:
-        description: "Frekuensi cluster kecil (kHz)"
-        default: "2500000"
-      dv:
-        description: "Tambahan tegangan (satuan 10uV, 2500 = 25mV)"
-        default: "2500"
 
 jobs:
   build:
@@ -49,6 +39,7 @@ jobs:
                   fail("titik tidak ditemukan: " + anchor)
               return s[:i] + text + s[i:]
 
+          # ---- fs/exec.c ----
           p = "fs/exec.c"
           s = rd(p)
           if "ksu_handle_execveat" not in s:
@@ -64,6 +55,7 @@ jobs:
               wr(p, s)
               print("OK", p)
 
+          # ---- fs/open.c ----
           p = "fs/open.c"
           s = rd(p)
           if "ksu_handle_faccessat" not in s:
@@ -75,6 +67,7 @@ jobs:
               wr(p, s)
               print("OK", p)
 
+          # ---- fs/read_write.c ----
           p = "fs/read_write.c"
           s = rd(p)
           if "ksu_handle_sys_read" not in s:
@@ -86,6 +79,7 @@ jobs:
               wr(p, s)
               print("OK", p)
 
+          # ---- fs/stat.c ----
           p = "fs/stat.c"
           s = rd(p)
           if "ksu_handle_stat" not in s:
@@ -97,6 +91,7 @@ jobs:
               wr(p, s)
               print("OK", p)
 
+          # ---- kernel/reboot.c ----
           p = "kernel/reboot.c"
           s = rd(p)
           if "ksu_handle_sys_reboot" not in s:
@@ -112,67 +107,6 @@ jobs:
           echo "=== HOOK TERPASANG ==="
           grep -rn "ksu_handle" fs kernel --include=*.c | grep -v "drivers/kernelsu" | head -20
 
-      - name: Terapkan overclock
-        env:
-          BIG_KHZ: ${{ inputs.big_khz }}
-          LITTLE_KHZ: ${{ inputs.little_khz }}
-          DV: ${{ inputs.dv }}
-        run: |
-          cat > patch_oc.py <<'EOF'
-          import os, re, sys
-
-          D = "drivers/misc/mediatek/base/power/cpufreq_v1/src/mach/mt6768/"
-          OPP = D + "mtk_cpufreq_opp_table.h"
-          PV = D + "mtk_cpufreq_opp_pv_table.h"
-
-          big = int(os.environ["BIG_KHZ"])
-          lit = int(os.environ["LITTLE_KHZ"])
-          dv = int(os.environ["DV"])
-
-          def fail(m):
-              print("GAGAL:", m)
-              sys.exit(1)
-
-          def sub1(s, pat, repl, what):
-              new, n = re.subn(pat, repl, s, count=1)
-              if n != 1:
-                  fail("tidak ketemu: " + what)
-              return new
-
-          def up625(v):
-              return ((v + 624) // 625) * 625
-
-          s = open(OPP).read()
-          s = sub1(s, r"(#define\s+CPU_DVFS_FREQ0_L_G75\s+)2500000", r"\g<1>%d" % big, "FREQ0_L_G75")
-          s = sub1(s, r"(#define\s+CPU_DVFS_FREQ0_LL_G75\s+)2300000", r"\g<1>%d" % lit, "FREQ0_LL_G75")
-
-          def bump(s, name, old):
-              new = up625(old + dv) if dv > 0 else old
-              if new > 115000:
-                  fail("tegangan melebihi batas aman: %d" % new)
-              print(name, old, "->", new)
-              return sub1(s, r"(#define\s+%s\s+)%d" % (name, old), r"\g<1>%d" % new, name)
-
-          s = bump(s, "CPU_DVFS_VOLT0_VPROC2_G75", 109750)
-          s = bump(s, "CPU_DVFS_VOLT0_VPROC1_G75", 103625)
-          open(OPP, "w").write(s)
-
-          p = open(PV).read()
-          i = p.find("FY_G75Tbl[")
-          if i < 0:
-              fail("FY_G75Tbl tidak ketemu")
-          head, tail = p[:i], p[i:]
-          tail = sub1(tail, r"\{\s*2300,\s*81,\s*1,\s*1\s*\}", "{ %d, 83, 1, 1 }" % (lit // 1000), "pv 2300")
-          tail = sub1(tail, r"\{\s*2500,\s*94,\s*1,\s*1\s*\}", "{ %d, 96, 1, 1 }" % (big // 1000), "pv 2500")
-          open(PV, "w").write(head + tail)
-          print("OK overclock")
-          EOF
-          python3 patch_oc.py
-          echo "=== PERUBAHAN OC ==="
-          git diff -U0 -- drivers/misc/mediatek/base/power/cpufreq_v1 | grep -E "^[+-][^+-]" || true
-          echo "=== INFO EEM (hanya info) ==="
-          grep -rn -i "freq_base" drivers/misc/mediatek --include=*.h --include=*.c | head -20 || true
-
       - name: Cari defconfig dan aktifkan manual hook
         run: |
           DEF=$(ls arch/arm64/configs | grep -i merlin | head -1)
@@ -181,16 +115,6 @@ jobs:
           test -n "$DEF"
           echo "DEF=$DEF" >> $GITHUB_ENV
           printf 'CONFIG_KSU=y\nCONFIG_KSU_MANUAL_HOOK=y\n# CONFIG_KSU_SYSCALL_TABLE_HOOK is not set\n# CONFIG_KSU_KPROBES_HOOK is not set\n' >> arch/arm64/configs/$DEF
-
-     - name: Tweak performa
-        run: |
-          cat >> arch/arm64/configs/$DEF <<'EOF'
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_DEFAULT_BBR=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          EOF
 
       - name: Download Proton Clang
         run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang-13/aaa
@@ -204,6 +128,8 @@ jobs:
           [ -f out/arch/arm64/boot/Image.gz-dtb ] || $MK Image.gz-dtb >> build.log 2>&1 || true
           echo "=== MODE HOOK ==="
           grep -n "Hook mode" build.log | head -3 || true
+          echo "=== CONFIG HASIL ==="
+          grep -n -E "CONFIG_KSU|CONFIG_KPROBES" out/.config || true
           echo "=== PESAN ERROR ==="
           grep -n -E "error:|\*\*\*|Stop\." build.log | grep -v -E "ERR_get_error|extract-cert" | head -40 || true
           echo "=== 40 BARIS TERAKHIR ==="
@@ -220,11 +146,11 @@ jobs:
           rm -f AK3/*.zip AK3/*-dtb AK3/Image*
           rm -rf AK3/ramdisk/overlay.d
           cp out/arch/arm64/boot/Image.gz-dtb AK3/
-          cd AK3 && zip -r9 ../kernel-merlin-ksunext-oc.zip . -x ".git*"
+          cd AK3 && zip -r9 ../kernel-merlin-ksunext-manual.zip . -x ".git*"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kernel-merlin-ksunext-oc
+          name: kernel-merlin-ksunext-manual
           path: |
-            kernel-merlin-ksunext-oc.zip
+            kernel-merlin-ksunext-manual.zip
             out/arch/arm64/boot/Image.gz-dtb
