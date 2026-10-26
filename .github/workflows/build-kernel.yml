@@ -1,0 +1,258 @@
+name: Build Kernel merlin (MT6768 4.19)
+
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: "Nama defconfig (cek di arch/arm64/configs/)"
+        default: "merlin_defconfig"
+      enable_ksu:
+        description: "Integrasi KernelSU"
+        type: boolean
+        default: true
+      ksu_ref:
+        description: "Branch KernelSU-Next (legacy = untuk kernel non-GKI 4.x seperti merlin)"
+        default: "legacy"
+      cpu_governor:
+        description: "Default CPU governor"
+        type: choice
+        default: "schedutil"
+        options: [schedutil, performance, interactive]
+      io_scheduler:
+        description: "Default I/O scheduler"
+        type: choice
+        default: "bfq"
+        options: [bfq, kyber, cfq, deadline]
+      zram_comp:
+        description: "Default kompresi ZRAM"
+        type: choice
+        default: "lz4"
+        options: [lz4, zstd]
+      tcp_cc:
+        description: "TCP congestion control"
+        type: choice
+        default: "bbr"
+        options: [bbr, cubic]
+      disable_fsync:
+        description: "Sediakan opsi fsync control (RISIKO kehilangan data)"
+        type: boolean
+        default: false
+
+env:
+  ARCH: arm64
+  SUBARCH: arm64
+  TZ: Asia/Jakarta
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Maximize disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout source kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev cpio zip unzip git curl \
+            python3 ccache lz4 zstd device-tree-compiler build-essential \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Download Clang toolchain (Proton Clang)
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git "$HOME/clang"
+          echo "$HOME/clang/bin" >> "$GITHUB_PATH"
+          "$HOME/clang/bin/clang" --version | head -n1
+
+      - name: Integrasi KernelSU-Next (legacy)
+        if: ${{ inputs.enable_ksu }}
+        run: |
+          REF="${{ inputs.ksu_ref }}"
+          # setup.sh diam-diam jatuh ke branch default kalau ref salah, jadi cek dulu
+          if ! git ls-remote --exit-code --heads --tags https://github.com/KernelSU-Next/KernelSU-Next "$REF" >/dev/null; then
+            echo "Ref '$REF' tidak ada. Branch/tag yang tersedia:"
+            git ls-remote --heads https://github.com/KernelSU-Next/KernelSU-Next | awk '{print $2}'
+            exit 1
+          fi
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${REF}/kernel/setup.sh" | bash -s "$REF"
+          git -C KernelSU-Next log -1 --oneline 2>/dev/null || git -C KernelSU log -1 --oneline 2>/dev/null || true
+          ls -la drivers/kernelsu 2>/dev/null || true
+
+      - name: Backport patch (opsional, dari folder patches/)
+        run: |
+          # Taruh file .patch di folder patches/ pada repo kamu (mis. backport
+          # security patch 4.19.y, BBR, LZ4/ZSTD, touchboost, dll).
+          if [ -d patches ]; then
+            for p in patches/*.patch; do
+              [ -e "$p" ] || continue
+              echo ">> apply $p"
+              git apply --check "$p" && git apply "$p" || echo "!! GAGAL/skip: $p"
+            done
+          else
+            echo "Tidak ada folder patches/, dilewati."
+          fi
+
+      - name: Generate defconfig + tweak
+        run: |
+          mkdir -p out
+          make O=out CC=clang LLVM=1 LLVM_IAS=0 "${{ inputs.defconfig }}"
+
+          CFG="scripts/config --file out/.config"
+
+          # Set opsi hanya jika simbolnya memang ada di source (aman untuk 4.19 non-GKI)
+          sym_exists() { grep -rqE "^\s*(menu)?config $1\$" --include='Kconfig*' . 2>/dev/null; }
+          en()  { if sym_exists "$1"; then $CFG -e "$1"; echo "[+] $1=y"; else echo "[-] skip $1 (tidak ada di source)"; fi; }
+          dis() { if sym_exists "$1"; then $CFG -d "$1"; echo "[x] $1 off"; fi; }
+          mod() { if sym_exists "$1"; then $CFG -m "$1"; fi; }
+          str() { if sym_exists "$1"; then $CFG --set-str "$1" "$2"; echo "[=] $1=\"$2\""; fi; }
+
+          # ---- 1. KernelSU + kprobes ----
+          if [ "${{ inputs.enable_ksu }}" = "true" ]; then
+            en CONFIG_KSU
+            en CONFIG_MODULES
+            en CONFIG_KPROBES
+            en CONFIG_HAVE_KPROBES
+            en CONFIG_KPROBE_EVENTS
+            en CONFIG_OVERLAY_FS
+          fi
+
+          # ---- 2. CPU governor ----
+          en CONFIG_CPU_FREQ_GOV_SCHEDUTIL
+          en CONFIG_CPU_FREQ_GOV_PERFORMANCE
+          en CONFIG_CPU_FREQ_GOV_INTERACTIVE
+          case "${{ inputs.cpu_governor }}" in
+            schedutil)   en CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL ;;
+            performance) en CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE ;;
+            interactive) en CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE ;;
+          esac
+          # Fitur bawaan vendor (hanya aktif jika ada di source kamu)
+          en CONFIG_SCHED_WALT
+          en CONFIG_UCLAMP_TASK
+          en CONFIG_SCHED_TUNE
+          en CONFIG_CPU_BOOST
+          en CONFIG_INPUT_BOOST
+          en CONFIG_TOUCH_BOOST
+          en CONFIG_MTK_PERFMGR_TOUCH_BOOST
+          en CONFIG_MTK_FPSGO_V3
+
+          # ---- 3. Memori & I/O ----
+          en CONFIG_ZRAM
+          en CONFIG_ZRAM_WRITEBACK
+          en CONFIG_CRYPTO_LZ4
+          en CONFIG_CRYPTO_LZ4HC
+          en CONFIG_CRYPTO_ZSTD
+          en CONFIG_ZSMALLOC
+          if [ "${{ inputs.zram_comp }}" = "zstd" ]; then
+            en CONFIG_ZRAM_DEF_COMP_ZSTD
+            str CONFIG_ZRAM_DEF_COMP "zstd"
+          else
+            en CONFIG_ZRAM_DEF_COMP_LZ4
+            str CONFIG_ZRAM_DEF_COMP "lz4"
+          fi
+
+          en CONFIG_IOSCHED_BFQ
+          en CONFIG_BFQ_GROUP_IOSCHED
+          en CONFIG_MQ_IOSCHED_KYBER
+          en CONFIG_IOSCHED_DEADLINE
+          en CONFIG_IOSCHED_CFQ
+          case "${{ inputs.io_scheduler }}" in
+            bfq)      en CONFIG_DEFAULT_BFQ;      str CONFIG_DEFAULT_IOSCHED "bfq" ;;
+            kyber)    en CONFIG_DEFAULT_KYBER;    str CONFIG_DEFAULT_IOSCHED "kyber" ;;
+            cfq)      en CONFIG_DEFAULT_CFQ;      str CONFIG_DEFAULT_IOSCHED "cfq" ;;
+            deadline) en CONFIG_DEFAULT_DEADLINE; str CONFIG_DEFAULT_IOSCHED "deadline" ;;
+          esac
+
+          # Wakelock blocker (ada hanya jika source / patch kamu menyediakannya)
+          en CONFIG_BOEFFLA_WL_BLOCKER
+          en CONFIG_PM_WAKELOCKS_LIMIT
+
+          # ---- 4. Jaringan ----
+          en CONFIG_TCP_CONG_ADVANCED
+          en CONFIG_TCP_CONG_BBR
+          en CONFIG_NET_SCH_FQ
+          en CONFIG_NET_SCH_FQ_CODEL
+          if [ "${{ inputs.tcp_cc }}" = "bbr" ]; then
+            en CONFIG_DEFAULT_BBR
+            str CONFIG_DEFAULT_TCP_CONG "bbr"
+            str CONFIG_DEFAULT_NET_SCH "fq"
+          else
+            str CONFIG_DEFAULT_TCP_CONG "cubic"
+          fi
+
+          # ---- 5. Kustomisasi lain ----
+          en CONFIG_SND_SOC_WCD_MBHC
+          en CONFIG_SOUND_CONTROL
+          if [ "${{ inputs.disable_fsync }}" = "true" ]; then
+            en CONFIG_DYNAMIC_FSYNC
+          fi
+
+          # Hemat ukuran & hindari error warning pada clang
+          dis CONFIG_DEBUG_INFO
+          dis CONFIG_LTO_CLANG_THIN_NOT_SUPPORTED
+
+          make O=out CC=clang LLVM=1 LLVM_IAS=0 olddefconfig
+
+          echo "=== Ringkasan config penting ==="
+          grep -E "CONFIG_(KSU|KPROBES|CPU_FREQ_DEFAULT_GOV|ZRAM_DEF_COMP|DEFAULT_IOSCHED|DEFAULT_TCP_CONG|TCP_CONG_BBR|IOSCHED_BFQ)=" out/.config || true
+
+      - name: Compile kernel
+        run: |
+          export PATH="$HOME/clang/bin:$PATH"
+          START=$(date +%s)
+          make -j"$(nproc)" O=out \
+            CC=clang LLVM=1 LLVM_IAS=0 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            2>&1 | tee build.log
+          echo "Build selesai dalam $(( $(date +%s) - START )) detik"
+
+      - name: Cek hasil build
+        run: |
+          ls -la out/arch/arm64/boot/ || true
+          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ] && [ ! -f out/arch/arm64/boot/Image.gz ] && [ ! -f out/arch/arm64/boot/Image ]; then
+            echo "Image kernel tidak ditemukan"; exit 1
+          fi
+
+      - name: Package AnyKernel3 zip
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
+          rm -rf AK3/.git AK3/.github AK3/README.md
+          B=out/arch/arm64/boot
+          if   [ -f $B/Image.gz-dtb ]; then cp $B/Image.gz-dtb AK3/
+          elif [ -f $B/Image.gz ];     then cp $B/Image.gz AK3/
+          else                              cp $B/Image AK3/; fi
+          [ -f $B/dtb ]     && cp $B/dtb AK3/ || true
+          [ -f $B/dtbo.img ] && cp $B/dtbo.img AK3/ || true
+
+          # Sesuaikan anykernel.sh untuk merlin
+          sed -i 's|^kernel.string=.*|kernel.string=Custom Kernel merlin|' AK3/anykernel.sh
+          sed -i 's|^do.devicecheck=.*|do.devicecheck=1|' AK3/anykernel.sh
+          sed -i 's|^device.name1=.*|device.name1=merlin|' AK3/anykernel.sh
+          sed -i 's|^device.name2=.*|device.name2=merlinx|' AK3/anykernel.sh
+          sed -i 's|^supported.versions=.*|supported.versions=|' AK3/anykernel.sh
+          sed -i 's|^BLOCK=.*|BLOCK=/dev/block/by-name/boot;|' AK3/anykernel.sh
+          sed -i 's|^IS_SLOT_DEVICE=.*|IS_SLOT_DEVICE=0;|' AK3/anykernel.sh
+
+          ZIP="Kernel-merlin-$(date +%Y%m%d-%H%M).zip"
+          (cd AK3 && zip -r9 "../$ZIP" . -x '*.git*')
+          echo "ZIP_NAME=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            out/.config
+            build.log
+          retention-days: 14
