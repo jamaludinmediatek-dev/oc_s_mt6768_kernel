@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       defconfig:
-        description: "Nama defconfig (cek di arch/arm64/configs/)"
-        default: "merlin_defconfig"
+        description: "Nama defconfig, atau 'auto' untuk deteksi otomatis (merlin/mt6768)"
+        default: "auto"
       enable_ksu:
         description: "Integrasi KernelSU"
         type: boolean
@@ -104,7 +104,22 @@ jobs:
       - name: Generate defconfig + tweak
         run: |
           mkdir -p out
-          make O=out CC=clang LLVM=1 LLVM_IAS=0 "${{ inputs.defconfig }}"
+          DEFCONFIG="${{ inputs.defconfig }}"
+          if [ "$DEFCONFIG" = "auto" ]; then
+            echo "Defconfig yang tersedia (merlin/mt6768):"
+            find arch/arm64/configs -type f \( -iname '*merlin*' -o -iname '*mt6768*' \) | sort
+            F=$(find arch/arm64/configs -type f -iname '*merlin*defconfig' | sort | head -n1)
+            [ -z "$F" ] && F=$(find arch/arm64/configs -type f -iname '*mt6768*defconfig' | sort | head -n1)
+            if [ -z "$F" ]; then
+              echo "Defconfig tidak ditemukan otomatis. Isi input 'defconfig' manual."
+              ls arch/arm64/configs | head -n 100
+              exit 1
+            fi
+            # make butuh nama relatif terhadap arch/arm64/configs (mis. vendor/xxx_defconfig)
+            DEFCONFIG="${F#arch/arm64/configs/}"
+          fi
+          echo ">> Memakai defconfig: $DEFCONFIG"
+          make O=out CC=clang LLVM_IAS=0 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- "$DEFCONFIG"
 
           CFG="scripts/config --file out/.config"
 
@@ -199,7 +214,7 @@ jobs:
           dis CONFIG_DEBUG_INFO
           dis CONFIG_LTO_CLANG_THIN_NOT_SUPPORTED
 
-          make O=out CC=clang LLVM=1 LLVM_IAS=0 olddefconfig
+          make O=out CC=clang LLVM_IAS=0 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu- olddefconfig
 
           echo "=== Ringkasan config penting ==="
           grep -E "CONFIG_(KSU|KPROBES|CPU_FREQ_DEFAULT_GOV|ZRAM_DEF_COMP|DEFAULT_IOSCHED|DEFAULT_TCP_CONG|TCP_CONG_BBR|IOSCHED_BFQ)=" out/.config || true
@@ -209,7 +224,7 @@ jobs:
           export PATH="$HOME/clang/bin:$PATH"
           START=$(date +%s)
           make -j"$(nproc)" O=out \
-            CC=clang LLVM=1 LLVM_IAS=0 \
+            CC=clang LLVM_IAS=0 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
