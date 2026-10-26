@@ -222,13 +222,20 @@ jobs:
       - name: Compile kernel
         run: |
           export PATH="$HOME/clang/bin:$PATH"
+          set -o pipefail
           START=$(date +%s)
-          make -j"$(nproc)" O=out \
+          if ! make -j"$(nproc)" O=out \
             CC=clang LLVM_IAS=0 \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            2>&1 | tee build.log
+            2>&1 | tee build.log; then
+            echo "=============== BUILD GAGAL: baris error ==============="
+            grep -nE "error:|Error [0-9]|undefined reference|No rule to make target|fatal" build.log | head -n 40
+            echo "=============== 40 baris terakhir ==============="
+            tail -n 40 build.log
+            exit 1
+          fi
           echo "Build selesai dalam $(( $(date +%s) - START )) detik"
 
       - name: Cek hasil build
