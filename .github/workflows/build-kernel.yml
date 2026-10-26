@@ -224,19 +224,29 @@ jobs:
           export PATH="$HOME/clang/bin:$PATH"
           set -o pipefail
           START=$(date +%s)
-          if ! make -j"$(nproc)" O=out \
-            CC=clang LLVM_IAS=0 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            2>&1 | tee build.log; then
-            echo "=============== BUILD GAGAL: baris error ==============="
-            grep -nE "error:|Error [0-9]|undefined reference|No rule to make target|fatal" build.log | head -n 40
-            echo "=============== 40 baris terakhir ==============="
-            tail -n 40 build.log
+          MK="make O=out CC=clang LLVM_IAS=0 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
+          if ! $MK -j"$(nproc)" 2>&1 | tee build.log; then
+            echo ""
+            echo "=============== BUILD GAGAL ==============="
+            echo ">> Ulangi make dengan -j1 supaya error aslinya muncul paling bawah"
+            $MK -j1 -k 2>&1 | tail -n 80 | tee error-tail.log || true
+            echo ""
+            echo "=============== Baris error di build.log ==============="
+            grep -nE "error:|Error [0-9]+|undefined reference|No rule to make target|fatal error|undefined symbol|ld.lld:|ld:" build.log | head -n 40 || true
             exit 1
           fi
           echo "Build selesai dalam $(( $(date +%s) - START )) detik"
+
+      - name: Upload log kalau gagal
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-gagal
+          path: |
+            build.log
+            error-tail.log
+            out/.config
+          retention-days: 7
 
       - name: Cek hasil build
         run: |
